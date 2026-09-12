@@ -38,7 +38,7 @@ hermes plugins install <path-or-repo>
 ```yaml
 # ~/.hermes/config.yaml
 remote_gateway:
-  url: "https://dash.dktunnel.xyz"
+  url: "https://mydomen.com"
   auth: "oauth"           # oauth | token | basic
   token: ""               # for auth: token
   username: ""            # for auth: basic
@@ -59,7 +59,7 @@ hermes remote connect
 hermes remote chat -q "What is the capital of France?"
 
 # With explicit URL (overrides config)
-hermes remote chat -q "test" --url https://dash.dktunnel.xyz --auth oauth
+hermes remote chat -q "test" --url https://mydomen.com --auth oauth
 
 # Test connection
 hermes remote status
@@ -83,7 +83,7 @@ hermes remote disconnect
 ### Basic Auth (LAN/VPN only)
 ```bash
 hermes config set remote_gateway.auth basic
-hermes config set remote_gateway.username admin
+hermes config set remote_gateway.username login
 hermes config set remote_gateway.password "secret"
 # or via env: HERMES_REMOTE_GATEWAY_PASSWORD
 ```

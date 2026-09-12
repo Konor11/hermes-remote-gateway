@@ -11,7 +11,7 @@ hermes remote connect
 
 hermes                  ← ОБЫЧНАЯ команда, без подкоманды
   → читает .env → нативный TUI подключается к ws://127.0.0.1:43827
-  → прокси минтит свежий WS-ticket и туннелирует в wss://dash.dktunnel.xyz/api/ws
+  → прокси минтит свежий WS-ticket и туннелирует в wss://mydomen.com/api/ws
   → ОТКРЫВАЕТСЯ НАТИВНЫЙ TUI удалённого gateway
 
 hermes remote disconnect
@@ -42,13 +42,13 @@ hermes remote --help
 
 ```bash
 # URL удалённого gateway
-hermes config set remote_gateway.url "https://dash.dktunnel.xyz"
+hermes config set remote_gateway.url "https://mydomen.com"
 
 # Режим аутентификации: oauth | token | basic
 hermes config set remote_gateway.auth "oauth"
 
 # Если basic:
-hermes config set remote_gateway.username "admin"
+hermes config set remote_gateway.username "login"
 hermes config set remote_gateway.password "твой-пароль"
 
 # Если token:

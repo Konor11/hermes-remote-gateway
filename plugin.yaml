@@ -18,7 +18,7 @@ config_schema:
     properties:
       url:
         type: string
-        description: "Remote gateway URL (e.g., https://dash.dktunnel.xyz)"
+        description: "Remote gateway URL (e.g., https://mydomen.com)"
       auth:
         type: string
         enum: ["oauth", "token", "basic"]

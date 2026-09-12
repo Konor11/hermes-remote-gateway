@@ -16,7 +16,7 @@ def register(ctx) -> None:
     def setup_remote_parser(subparser: argparse.ArgumentParser) -> None:
         """Setup the remote subcommand parser - receives subparser from main parser"""
         subparser.add_argument(
-            "--url", help="Remote gateway URL (e.g., https://dash.dktunnel.xyz)"
+            "--url", help="Remote gateway URL (e.g., https://mydomen.com)"
         )
         subparser.add_argument(
             "--auth", choices=["oauth", "token", "basic"], help="Authentication mode"
@@ -31,7 +31,7 @@ def register(ctx) -> None:
         
         # connect command
         connect_parser = remote_subparsers.add_parser("connect", help="Connect and start interactive chat")
-        connect_parser.add_argument("--url", help="Remote gateway URL (e.g., https://dash.dktunnel.xyz)")
+        connect_parser.add_argument("--url", help="Remote gateway URL (e.g., https://mydomen.com)")
         connect_parser.add_argument("--auth", choices=["oauth", "token", "basic"], help="Authentication mode")
         connect_parser.add_argument("--token", help="Session token (for token auth)")
         connect_parser.add_argument("--username", help="Username (for basic auth)")
