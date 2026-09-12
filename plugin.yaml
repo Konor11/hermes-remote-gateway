@@ -1,0 +1,51 @@
+name: hermes-remote-gateway
+version: "0.1.0"
+description: "CLI plugin to connect Hermes CLI to a remote Hermes gateway via WebSocket with OAuth/Token/Basic Auth"
+author: "DKTunnel"
+license: "MIT"
+manifest_version: 2
+kind: standalone
+provides_tools: []
+capabilities: []
+requires_plugins: []
+pip_dependencies:
+  - aiohttp>=3.8.0
+  - pyyaml>=6.0
+config_schema:
+  remote_gateway:
+    type: object
+    description: "Remote gateway connection settings"
+    properties:
+      url:
+        type: string
+        description: "Remote gateway URL (e.g., https://dash.dktunnel.xyz)"
+      auth:
+        type: string
+        enum: ["oauth", "token", "basic"]
+        description: "Authentication mode"
+        default: "oauth"
+      token:
+        type: string
+        description: "Session token (for token auth)"
+      username:
+        type: string
+        description: "Username (for basic auth)"
+      password:
+        type: string
+        description: "Password (for basic auth)"
+      profile:
+        type: string
+        description: "Remote profile name"
+        default: "default"
+      auto_reconnect:
+        type: boolean
+        description: "Auto-reconnect on disconnect"
+        default: true
+      reconnect_attempts:
+        type: integer
+        description: "Max reconnection attempts"
+        default: 5
+      reconnect_delay:
+        type: number
+        description: "Initial reconnection delay (seconds)"
+        default: 2.0
