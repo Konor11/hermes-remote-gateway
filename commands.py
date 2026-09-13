@@ -2,7 +2,6 @@
 Hermes Remote Gateway Plugin - CLI Commands
 """
 import asyncio
-import shutil
 import sys
 from typing import Optional, List
 import argparse
@@ -207,9 +206,6 @@ class RemoteGatewayCLI:
             raise RuntimeError("Authorization timed out while obtaining WebSocket URL")
         except Exception as e:
             raise RuntimeError(f"Authentication failed: {e}")
-
-        # 2. Locate the hermes binary only to find the venv/script for the daemon.
-        hermes_bin = os.environ.get("HERMES_BIN") or shutil_which("hermes") or "/usr/local/bin/hermes"
 
         # 3. Spawn the proxy daemon (detached; persists after this process).
         daemon_module = Path(__file__).resolve().parent / "daemon.py"
