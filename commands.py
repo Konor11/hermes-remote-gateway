@@ -161,21 +161,54 @@ class RemoteGatewayCLI:
         self._streaming = False
     
     async def status(self) -> dict:
-        """Get connection status"""
+        """Get connection status — checks the ACTUAL daemon/.env state."""
+        import os
+        import socket
+        import subprocess
+        from pathlib import Path
+
         base = {
             "url": self.config.url,
             "auth": self.config.auth,
             "profile": self.config.profile,
         }
-        if not self.client:
-            base.update({"connected": False, "state": "not_initialized", "session_id": None})
-            return base
 
-        base.update({
-            "connected": self.client.is_connected(),
-            "state": self.client.state.value,
-            "session_id": self.client.current_session_id,
-        })
+        home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+        env_file = home / ".env"
+        local_port = self.config.oauth_callback_port
+
+        # 1) .env has HERMES_TUI_GATEWAY_URL?
+        env_ok = False
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("HERMES_TUI_GATEWAY_URL=ws://127.0.0.1:%d" % local_port):
+                    env_ok = True
+                    break
+        base["env_url"] = env_ok
+
+        # 2) daemon process alive?
+        daemon_alive = False
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", "remote-gateway/daemon.py"],
+                capture_output=True, text=True, timeout=5)
+            daemon_alive = bool(out.stdout.strip())
+        except Exception:
+            daemon_alive = False
+        base["daemon_alive"] = daemon_alive
+
+        # 3) local proxy port listening?
+        port_open = False
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=2):
+                port_open = True
+        except OSError:
+            port_open = False
+        base["port_open"] = port_open
+
+        connected = env_ok and daemon_alive and port_open
+        base["connected"] = connected
+        base["state"] = "connected" if connected else "disconnected"
         return base
     
     async def interactive_tui(self) -> int:
@@ -456,8 +489,9 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
             print(f"URL: {status['url']}")
             print(f"Auth: {status['auth']}")
             print(f"Profile: {status['profile']}")
-            if status['session_id']:
-                print(f"Session: {status['session_id']}")
+            print(f".env URL: {'✅' if status.get('env_url') else '❌ no'}")
+            print(f"Daemon proc: {'✅' if status.get('daemon_alive') else '❌ no'}")
+            print(f"Port {status.get('port_open') and '✅ open' or '❌ closed'}")
             return 0
             
         elif args.remote_command == "disconnect":
