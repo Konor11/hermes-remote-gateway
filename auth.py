@@ -370,7 +370,7 @@ class RemoteGatewayAuth:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     token_url,
-                    data={
+                    json={
                         "code": code,
                         "code_verifier": pkce.verifier,
                         "redirect_uri": callback_url,
