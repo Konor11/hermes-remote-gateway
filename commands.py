@@ -162,17 +162,21 @@ class RemoteGatewayCLI:
     
     async def status(self) -> dict:
         """Get connection status"""
-        if not self.client:
-            return {"connected": False, "state": "not_initialized"}
-        
-        return {
-            "connected": self.client.is_connected(),
-            "state": self.client.state.value,
+        base = {
             "url": self.config.url,
             "auth": self.config.auth,
             "profile": self.config.profile,
-            "session_id": self.client.current_session_id,
         }
+        if not self.client:
+            base.update({"connected": False, "state": "not_initialized", "session_id": None})
+            return base
+
+        base.update({
+            "connected": self.client.is_connected(),
+            "state": self.client.state.value,
+            "session_id": self.client.current_session_id,
+        })
+        return base
     
     async def interactive_tui(self) -> int:
         """Connect (variant B): write HERMES_TUI_GATEWAY_URL to .env and
