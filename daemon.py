@@ -156,13 +156,11 @@ class RemoteGatewayProxy:
             await local_ws.close(code=1011, message=str(exc).encode()[:120])
             return local_ws
 
-        # Send gateway.ready to the TUI so it proceeds to subscribe.
-        ready = {
-            "jsonrpc": "2.0", "method": "event",
-            "params": {"type": "gateway.ready",
-                       "payload": {"skin": {}, "change_events": True,
-                                   "heartbeat": True, "replay_epoch": 0}}}
-        await local_ws.send_json(ready)
+        # IMPORTANT: do NOT send a synthetic gateway.ready here. The real
+        # remote gateway already emits its own gateway.ready (with the correct
+        # skin) immediately after we connect; _proxy_remote_to_local relays it.
+        # A second, empty-skin ready confuses the native TUI into treating the
+        # connection as local/uninitialised and falling back to a local gateway.
 
         # Two legs, both directions.
         t1 = asyncio.create_task(self._proxy_leg(local_ws, remote_ws, "up"))
