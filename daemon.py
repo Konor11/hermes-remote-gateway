@@ -143,8 +143,13 @@ class RemoteGatewayProxy:
             _log.debug("[daemon] %s remote leg ended: %s", name, exc)
 
     async def _handle_connection(self, request: web.Request) -> web.WebSocketResponse:
-        local_ws = web.WebSocketResponse(
-            protocols=["hermes-gateway-v1"], autoping=False)
+        # NOTE: do NOT declare `protocols=[...]` here. The native TUI connects
+        # via undici WebSocket with NO Sec-WebSocket-Protocol header (see
+        # gatewayClient.ts: new WebSocket(attachUrl)). If we declare a required
+        # subprotocol, aiohttp rejects the handshake with 403 when the client
+        # omits it, and the TUI falls back to spawning a local gateway. Accept
+        # any client; the remote leg still sends hermes-gateway-v1.
+        local_ws = web.WebSocketResponse(autoping=False)
         await local_ws.prepare(request)
 
         tunnel_key = None
