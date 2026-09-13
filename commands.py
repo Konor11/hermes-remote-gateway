@@ -229,10 +229,28 @@ class RemoteGatewayCLI:
         state_file = home / "remote-gateway.json"
         local_port = self.config.oauth_callback_port
 
-        # If a daemon is already active, keep it (idempotent connect).
-        if ready_file.exists() and not state_file.with_suffix(".stop").exists():
+        # Idempotent connect: only short-circuit if the local proxy port is
+        # ACTUALLY listening (not merely because a stale ready-file survived a
+        # killed daemon). Otherwise clean up stale markers and start fresh.
+        import socket as _socket
+        _port_alive = False
+        try:
+            with _socket.create_connection(("127.0.0.1", local_port), timeout=1):
+                _port_alive = True
+        except OSError:
+            _port_alive = False
+
+        if _port_alive and not state_file.with_suffix(".stop").exists():
             print(f"✅ Already connected (daemon on 127.0.0.1:{local_port})")
             return 0
+
+        # Stale markers / leftover daemon from a previous run: clear them so a
+        # fresh daemon can bind the port.
+        try:
+            ready_file.unlink(missing_ok=True)
+            state_file.with_suffix(".stop").unlink(missing_ok=True)
+        except OSError:
+            pass
 
         print(f"🔌 Connecting to {self.config.url} (native TUI via local proxy)...")
 
