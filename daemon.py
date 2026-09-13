@@ -151,6 +151,8 @@ class RemoteGatewayProxy:
         # any client; the remote leg still sends hermes-gateway-v1.
         local_ws = web.WebSocketResponse(autoping=False)
         await local_ws.prepare(request)
+        _log.info("[daemon] local client connected: %s %s",
+                  request.remote, request.headers.get("Sec-WebSocket-Protocol", "(no subprotocol)"))
 
         tunnel_key = None
         remote_ws: Optional[aiohttp.ClientWebSocketResponse] = None

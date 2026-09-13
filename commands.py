@@ -278,11 +278,15 @@ class RemoteGatewayCLI:
         daemon_env["HERMES_REMOTE_GATEWAY_PASSWORD"] = self.config.password
 
         # Detach: start in background, don't wait (like a system service).
+        # Log stderr/stdout to a file for debugging (was DEVNULL — we were blind
+        # to daemon errors and to whether the TUI ever connected).
+        daemon_log = (home / "remote-gateway-daemon.log").open("ab")
         proc = subprocess.Popen(
             daemon_cmd, env=daemon_env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=daemon_log, stderr=daemon_log,
             start_new_session=True,
         )
+        print(f"  → daemon pid {proc.pid}, log {home / 'remote-gateway-daemon.log'}")
 
         # 4. Wait for the daemon to signal readiness.
         deadline = time.time() + 30
