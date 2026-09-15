@@ -313,10 +313,26 @@ class RemoteGatewayCLI:
         env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         env_file.chmod(0o600)
 
+        # Force the native TUI interface while connected. A bare `hermes` with
+        # display.interface: cli runs the classic REPL, which does NOT honor
+        # HERMES_TUI_GATEWAY_URL. Switching to tui makes bare `hermes` open the
+        # remote-backed Ink TUI exactly like `hermes --tui`.
+        self._set_display_interface("tui")
+
         print(f"⚡ Connected. Now just run `hermes` — it opens the native TUI "
               f"tunnelled to {self.config.url} via 127.0.0.1:{local_port}.")
         print(f"   To return to local Hermes: `hermes remote disconnect`")
         return 0
+
+    def _set_display_interface(self, value: str) -> None:
+        """Persist display.interface (cli/tui) via `hermes config set`."""
+        import subprocess
+        try:
+            subprocess.run(
+                ["hermes", "config", "set", "display.interface", value],
+                capture_output=True, text=True, timeout=20)
+        except Exception:
+            pass
 
     async def disconnect_remote(self) -> int:
         """Stop the proxy daemon and remove HERMES_TUI_GATEWAY_URL from .env
@@ -346,6 +362,9 @@ class RemoteGatewayCLI:
             env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
             if "\n".join(lines) == "":
                 env_file.write_text("", encoding="utf-8")
+
+        # Restore the CLI interface (bare `hermes` returns to the local REPL).
+        self._set_display_interface("cli")
 
         # 3. Look for any lingering daemon process and terminate it.
         import subprocess
