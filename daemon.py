@@ -154,36 +154,83 @@ class RemoteGatewayProxy:
         _log.info("[daemon] local client connected: %s %s",
                   request.remote, request.headers.get("Sec-WebSocket-Protocol", "(no subprotocol)"))
 
-        tunnel_key = None
-        remote_ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        # IMPORTANT: the local (TUI) socket must stay OPEN for the whole
+        # session. Only the REMOTE leg is reconnected when it drops — a killed
+        # tunnel must not make the TUI see "gateway exited". We do NOT send a
+        # synthetic gateway.ready; the real one is relayed by the down-leg.
         try:
-            remote_ws = await self._open_remote_tunnel()
-        except Exception as exc:  # noqa: BLE001
-            _log.error("[daemon] failed to open remote tunnel: %s", exc)
-            await local_ws.close(code=1011, message=str(exc).encode()[:120])
-            return local_ws
-
-        # IMPORTANT: do NOT send a synthetic gateway.ready here. The real
-        # remote gateway already emits its own gateway.ready (with the correct
-        # skin) immediately after we connect; _proxy_remote_to_local relays it.
-        # A second, empty-skin ready confuses the native TUI into treating the
-        # connection as local/uninitialised and falling back to a local gateway.
-
-        # Two legs, both directions.
-        t1 = asyncio.create_task(self._proxy_leg(local_ws, remote_ws, "up"))
-        t2 = asyncio.create_task(
-            self._proxy_remote_to_local(local_ws, remote_ws, "down"))
-        try:
-            done, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
+            await self._run_tunnel(local_ws)
         finally:
             await local_ws.close()
-            try:
-                await remote_ws.close()
-            except Exception:
-                pass
         return local_ws
+
+    async def _run_tunnel(self, local_ws: web.WebSocketResponse) -> None:
+        """Drive one TUI session end-to-end, reconnecting the REMOTE leg on
+        drops while keeping the LOCAL (TUI) socket stable."""
+
+        remote_ws: Optional[aiohttp.ClientWebSocketResponse] = None
+        up_task: asyncio.Task | None = None
+        down_task: asyncio.Task | None = None
+        local_done_evt = asyncio.Event()
+
+        async def open_remote_with_retry() -> bool:
+            nonlocal remote_ws
+            attempt = 0
+            while not local_done_evt.is_set():
+                try:
+                    remote_ws = await self._open_remote_tunnel()
+                    _log.info("[daemon] remote tunnel established")
+                    return True
+                except Exception as exc:  # noqa: BLE001
+                    attempt += 1
+                    wait = min(2.0 * attempt, 15.0)
+                    _log.warning("[daemon] remote connect failed (attempt %d): %s; retrying in %.0fs",
+                                 attempt, exc, wait)
+                    await asyncio.sleep(wait)
+            return False
+
+        # up-leg consumes the local (TUI) socket: it ends when local disconnects.
+        async def up_and_mark_local_done():
+            nonlocal up_task, down_task
+            try:
+                if remote_ws is not None:
+                    await self._proxy_leg(local_ws, remote_ws, "up")
+            finally:
+                local_done_evt.set()
+
+        async def run_legs(ws: aiohttp.ClientWebSocketResponse):
+            nonlocal up_task, down_task
+            up_task = asyncio.create_task(up_and_mark_local_done())
+            down_task = asyncio.create_task(
+                self._proxy_remote_to_local(local_ws, ws, "down"))
+
+        if not await open_remote_with_retry():
+            return
+
+        try:
+            while not local_done_evt.is_set():
+                await run_legs(remote_ws)
+                # wait until either leg finishes (remote dropped) or local closes
+                done, pending = await asyncio.wait(
+                    {up_task, down_task}, return_when=asyncio.FIRST_COMPLETED)
+                if local_done_evt.is_set():
+                    for t in pending:
+                        t.cancel()
+                    break
+                # down-leg ended (remote dropped): cancel stale legs, reconnect
+                for t in pending:
+                    t.cancel()
+                try:
+                    await remote_ws.close()
+                except Exception:
+                    pass
+                _log.warning("[daemon] remote tunnel dropped; reconnecting")
+                if not await open_remote_with_retry():
+                    break
+        finally:
+            for t in (up_task, down_task):
+                if t is not None:
+                    t.cancel()
 
     async def _health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "remote": self.config.url})
