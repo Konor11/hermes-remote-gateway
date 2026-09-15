@@ -64,30 +64,37 @@ class RemoteGatewayProxy:
         self.auth = RemoteGatewayAuth(config)
         self.state_file = state_file or _default_state_file()
         self._pending_tunnels: set = set()
+        self._session: Optional[aiohttp.ClientSession] = None
 
     # ---- JSON-RPC frame helpers ------------------------------------
 
-    def _ack(self, frame_id) -> dict:
-        return {"jsonrpc": "2.0", "result": {"ok": True}, "id": frame_id}
-
     def _route_frame(self, frame: dict) -> Optional[dict]:
-        """Apply proxy-side adjustments for frames in flight."""
+        """Apply proxy-side adjustments for frames in flight.
+
+        Return None → forward the frame to the remote gateway; return a dict →
+        answer locally and/or skip forwarding.
+
+        IMPORTANT: `gateway.ping` MUST be forwarded to the remote gateway, not
+        answered locally. The remote gateway uses the client's periodic pings as
+        its liveness signal; if we swallow them it thinks the (proxy) client has
+        gone silent and closes the idle tunnel after ~40s — which is exactly why
+        the TUI kept dying mid-session. Forwarding pings keeps the remote side
+        alive; its pong is relayed back to the TUI.
+        """
         if not isinstance(frame, dict):
             return None
-        method = frame.get("method")
-        if method == "gateway.ping":
-            # Answer pings locally so a momentarily stalled remote tunnel
-            # doesn't make the TUI think the gateway is dead.
-            return self._ack(frame.get("id"))
         return None
 
     # ---- WebSocket tunnel to remote gateway ------------------------
 
     async def _open_remote_tunnel(self) -> aiohttp.ClientWebSocketResponse:
         ws_url = await asyncio.wait_for(self.auth.get_websocket_url(), timeout=30)
-        session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=None))
-        ws = await session.ws_connect(
+        # Reuse ONE ClientSession across reconnects; a new session per tunnel
+        # leaked ("Unclosed client session") and accumulated on every drop.
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=None))
+        ws = await self._session.ws_connect(
             ws_url,
             protocols=["hermes-gateway-v1"],
             autoping=False,
@@ -286,6 +293,10 @@ class RemoteGatewayProxy:
             await stop.wait()
             watcher.cancel()
             await runner.cleanup()
+            # Close the reused remote ClientSession so asyncio doesn't warn
+            # about unclosed resources on shutdown.
+            if self._session is not None and not self._session.closed:
+                await self._session.close()
             try:
                 ready_file.unlink(missing_ok=True)
             except OSError:
