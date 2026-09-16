@@ -68,11 +68,14 @@ class RemoteGatewayProxy:
 
     # ---- JSON-RPC frame helpers ------------------------------------
 
-    def _route_frame(self, frame: dict) -> Optional[dict]:
+    def _route_frame(self, frame: dict) -> Optional[tuple[bool, dict]]:
         """Apply proxy-side adjustments for frames in flight.
 
-        Return None → forward the frame to the remote gateway; return a dict →
-        answer locally and/or skip forwarding.
+        Returns a tuple ``(forward: bool, payload: dict)``:
+          * ``(True, frame)``  → forward the (possibly rewritten) frame to the
+            remote gateway;
+          * ``(False, reply)`` → answer the local TUI ourselves, do not forward;
+          * ``None``           → drop the frame entirely.
 
         IMPORTANT: `gateway.ping` MUST be forwarded to the remote gateway, not
         answered locally. The remote gateway uses the client's periodic pings as
@@ -80,10 +83,25 @@ class RemoteGatewayProxy:
         gone silent and closes the idle tunnel after ~40s — which is exactly why
         the TUI kept dying mid-session. Forwarding pings keeps the remote side
         alive; its pong is relayed back to the TUI.
+
+        We also DROP the `model`/`provider` params that the local TUI sends with
+        `session.create`/`session.start`. Otherwise the laptop's own model would
+        win as model_override and the remote gateway would NOT use the model
+        configured by default in the dashboard's `config.yaml`. Stripping them
+        makes the remote side resolve its own configured default model.
         """
         if not isinstance(frame, dict):
             return None
-        return None
+        method = frame.get("method")
+        params = frame.get("params")
+        if method in ("session.create", "session.start") and isinstance(params, dict):
+            if params.get("model") or params.get("provider"):
+                params = dict(params)
+                params.pop("model", None)
+                params.pop("provider", None)
+                frame = dict(frame)
+                frame["params"] = params
+        return (True, frame)
 
     # ---- WebSocket tunnel to remote gateway ------------------------
 
@@ -113,10 +131,15 @@ class RemoteGatewayProxy:
                     except json.JSONDecodeError:
                         continue
                     reply = self._route_frame(frame)
-                    if reply is not None:
-                        await local_ws.send_json(reply)
-                        continue
-                    await remote_ws.send_str(msg.data)
+                    if reply is None:
+                        continue  # drop frame
+                    fp_forward, fp_payload = reply
+                    if fp_forward:
+                        await remote_ws.send_str(
+                            json.dumps(fp_payload, ensure_ascii=False))
+                    else:
+                        await local_ws.send_json(fp_payload)
+                    continue
                 elif msg.type == web.WSMsgType.BINARY:
                     await remote_ws.send_bytes(msg.data)
                 elif msg.type == web.WSMsgType.PING:
