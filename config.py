@@ -34,6 +34,9 @@ class RemoteGatewayConfig:
     local_pc_ssh_port: int = 2222        # loopback port opened on the REMOTE host
     local_pc_server_user: str = "root"   # ssh user on the remote host
     local_pc_laptop_user: str = ""       # ssh user on THIS laptop (default: $USER)
+    # Direct mode: point the TUI at the DOMAIN itself
+    # (wss://<host>/api/ws?token=<token>) instead of a local proxy daemon.
+    direct: bool = False
 
     def __post_init__(self):
         # Read from env vars if not set
@@ -66,6 +69,7 @@ class RemoteGatewayConfig:
             local_pc_ssh_port=rg.get("local_pc_ssh_port", 2222),
             local_pc_server_user=rg.get("local_pc_server_user", "root"),
             local_pc_laptop_user=rg.get("local_pc_laptop_user", ""),
+            direct=rg.get("direct", False),
         )
 
     def to_dict(self) -> dict:

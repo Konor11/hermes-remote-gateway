@@ -211,11 +211,45 @@ class RemoteGatewayCLI:
         base["state"] = "connected" if connected else "disconnected"
         return base
     
+    async def _connect_direct(self, env_file) -> int:
+        """DIRECT mode: point the TUI at the DOMAIN itself, no local proxy."""
+        import subprocess
+        if not self.config.token:
+            print("❌ direct mode needs the dashboard session token.\n"
+                  "   Set it with:\n"
+                  "     hermes config set remote_gateway.auth token\n"
+                  "     hermes config set remote_gateway.token <TOKEN>",
+                  file=sys.stderr)
+            return 1
+        host = self.config.url.rstrip("/")
+        for pre in ("https://", "http://", "wss://", "ws://"):
+            if host.startswith(pre):
+                host = host[len(pre):]
+        url = f"wss://{host}/api/ws?token={self.config.token}"
+        try:
+            subprocess.run(["pkill", "-f", "remote-gateway/daemon.py"],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+        lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+        lines = [l for l in lines if not l.startswith("HERMES_TUI_GATEWAY_URL=")]
+        lines.append(f"HERMES_TUI_GATEWAY_URL={url}")
+        env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        env_file.chmod(0o600)
+        self._set_display_interface("tui")
+        print(f"⚡ Connected directly to {host} (native TUI, no local proxy).")
+        print("   Now run `hermes`. To return to local Hermes: `hermes remote disconnect`.")
+        return 0
+
     async def interactive_tui(self) -> int:
         """Connect (variant B): write HERMES_TUI_GATEWAY_URL to .env and
         spawn a local WebSocket proxy daemon. After this, a plain `hermes`
         boots the native TUI pointed at the LOCAL proxy (which tunnels to
         the remote gateway). `hermes remote disconnect` stops the daemon.
+
+        DIRECT mode (`remote_gateway.direct: true` + a pinned session token):
+        skip the local proxy entirely and point the TUI at the DOMAIN —
+        `wss://<host>/api/ws?token=<token>`. Fewer moving parts, no local port.
         """
         import os
         import subprocess
@@ -225,6 +259,10 @@ class RemoteGatewayCLI:
 
         home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
         env_file = home / ".env"
+
+        if self.config.direct:
+            return await self._connect_direct(env_file)
+
         ready_file = home / "remote-gateway-ready"
         state_file = home / "remote-gateway.json"
         local_port = self.config.oauth_callback_port
@@ -556,6 +594,8 @@ def create_parser() -> argparse.ArgumentParser:
     connect_parser.add_argument("--username", help="Username (for basic auth)")
     connect_parser.add_argument("--password", help="Password (for basic auth)")
     connect_parser.add_argument("--profile", help="Remote profile name")
+    connect_parser.add_argument("--direct", action="store_true", default=None,
+                                help="Connect straight to the domain (no local proxy daemon)")
     
     # chat command
     chat_parser = subparsers.add_parser("chat", help="Send a single query (oneshot)")
@@ -602,6 +642,8 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
         username=args.username or base_config.username,
         password=args.password or base_config.password,
         profile=args.profile or base_config.profile,
+        direct=getattr(args, "direct", None) if getattr(args, "direct", None) is not None
+        else base_config.direct,
         local_pc_access=getattr(args, "local_pc", None) if getattr(args, "local_pc", None) is not None
         else base_config.local_pc_access,
         local_pc_ssh_port=getattr(args, "local_pc_port", None) or base_config.local_pc_ssh_port,

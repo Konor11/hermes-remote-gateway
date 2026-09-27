@@ -41,6 +41,8 @@ def register(ctx) -> None:
                                     default=None, help="Also expose THIS laptop to the remote agent (reverse SSH tunnel)")
         connect_parser.add_argument("--no-local-pc", dest="local_pc", action="store_false",
                                     default=None, help="Disable local-PC access for this run")
+        connect_parser.add_argument("--direct", action="store_true", default=None,
+                                    help="Connect straight to the domain (no local proxy daemon)")
         
         # chat command
         chat_parser = remote_subparsers.add_parser("chat", help="Send a single query (oneshot mode)")
