@@ -370,6 +370,15 @@ class RemoteGatewayCLI:
         except Exception as e:
             raise RuntimeError(f"Authentication failed: {e}")
 
+        if self.config.local_pc_access:
+            # Needed only for local-PC access: an SSH server here + sshpass for
+            # the one-time key install. Cheap no-op when both are present.
+            from .deps import ensure_dependencies
+            _dep_ok, _dep_notes = ensure_dependencies(quiet=True)
+            if not _dep_ok:
+                for _n in _dep_notes:
+                    print(f"  ⚠ {_n}")
+
         # 3. Start the proxy daemon. Prefer a systemd --user unit so it comes
         #    back after logout/reboot (otherwise a bare `hermes` after a reboot
         #    silently falls back to LOCAL Hermes).
@@ -472,6 +481,16 @@ class RemoteGatewayCLI:
         """Manage local-PC access (remote agent runs on THIS laptop)."""
         pc = self._pc()
 
+        if action == "deps":
+            from .deps import detect_os, ensure_dependencies, sshd_hint
+            print(f"OS: {detect_os()}")
+            ok, notes = ensure_dependencies()
+            for n in notes:
+                print(f"  {n}")
+            if not ok:
+                print(f"  → {sshd_hint()}")
+            return 0 if ok else 1
+
         if action == "status":
             st = pc.status()
             print(f"Local-PC access (agent executes on THIS laptop)")
@@ -496,6 +515,12 @@ class RemoteGatewayCLI:
             return 0
 
         if action == "setup":
+            from .deps import sshd_hint as _hint, ensure_dependencies
+            dep_ok, dep_notes = ensure_dependencies()
+            for n in dep_notes:
+                print(f"   · {n}")
+            if not dep_ok:
+                print(f"   → {_hint()}")
             ok, msg = pc.ensure_sshd()
             print(f"1. sshd: {msg}")
             if not ok:

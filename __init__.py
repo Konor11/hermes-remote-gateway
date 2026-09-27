@@ -66,8 +66,8 @@ def register(ctx) -> None:
         pc_parser = remote_subparsers.add_parser(
             "pc", help="Let the remote agent run commands/read files on THIS laptop")
         pc_parser.add_argument("pc_action", nargs="?", default="status",
-                               choices=["setup", "status", "on", "off"],
-                               help="setup | status | on | off")
+                               choices=["setup", "status", "on", "off", "deps"],
+                               help="setup | status | on | off | deps")
         pc_parser.add_argument("--server-password",
                                help="SSH password on the remote host (one-time setup only; not stored)")
         pc_parser.add_argument("--no-apply", action="store_true",
@@ -110,6 +110,37 @@ def register(ctx) -> None:
         handler_fn=handle_remote_command,
         description="Connect Hermes CLI to a remote Hermes gateway via WebSocket with OAuth/Token/Basic Auth"
     )
+
+    # Surface missing SYSTEM dependencies once, at startup. `hermes plugins
+    # install` only resolves Python deps, so there is no install hook that could
+    # install openssh-server/sshpass — we only warn here (never install behind
+    # the user's back), and only when local-PC access is actually enabled.
+    try:
+        _notice_missing_deps()
+    except Exception:
+        pass
+
+
+def _notice_missing_deps() -> None:
+    """Print a one-line hint when local-PC access is on but deps are missing."""
+    import os
+    from pathlib import Path
+    try:
+        import yaml
+        cfg = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "config.yaml"
+        if not cfg.exists():
+            return
+        with open(cfg) as fh:
+            hc = yaml.safe_load(fh) or {}
+        if not RemoteGatewayConfig.from_config(hc).local_pc_access:
+            return
+    except Exception:
+        return
+    from .deps import missing
+    gaps = missing()
+    if gaps:
+        print(f"[hermes-remote-gateway] нет системных зависимостей: {', '.join(gaps)} — "
+              "запусти `hermes remote pc deps`", file=sys.stderr)
 
 
 # For backward compatibility - direct invocation
