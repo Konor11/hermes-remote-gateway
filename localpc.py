@@ -54,12 +54,22 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 
 
 def server_ssh_host(url: str) -> str:
-    """Hostname of the remote gateway host (ssh target for the reverse tunnel)."""
+    """Hostname of the remote gateway host (ssh target for the reverse tunnel).
+
+    ``remote_gateway.url`` is the same address the user already configured for
+    the gateway connection, so the SSH target is derived from it — never asked
+    for separately. Handles scheme, ``user@`` info, port and IPv6 literals.
+    """
     host = url.strip()
     for pre in ("https://", "http://", "wss://", "ws://"):
         if host.startswith(pre):
             host = host[len(pre):]
-    return host.split("/")[0].split(":")[0]
+    netloc = host.split("/")[0]
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[1]
+    if netloc.startswith("["):          # [::1]:443
+        return netloc.split("]")[0].lstrip("[")
+    return netloc.split(":")[0]
 
 
 class LocalPCAccess:

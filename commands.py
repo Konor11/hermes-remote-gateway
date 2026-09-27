@@ -515,6 +515,24 @@ class RemoteGatewayCLI:
             return 0
 
         if action == "setup":
+            # Say out loud WHERE we are about to SSH and where that address came
+            # from: the reverse tunnel needs the gateway HOST, which is derived
+            # from remote_gateway.url (scheme/path/port stripped) — never asked
+            # for separately.
+            ssh_target = f"{pc.server_user}@{pc.server_host}"
+            print(f"Remote host: {ssh_target}")
+            print(f"  адрес взят из remote_gateway.url = {self.config.url or '(не задан!)'}")
+            if not pc.server_host:
+                print("  ❌ задай адрес сервера: hermes config set remote_gateway.url https://<домен>")
+                return 1
+            try:
+                import socket as _sock
+                _ip = _sock.gethostbyname(pc.server_host)
+                if _ip != pc.server_host:
+                    print(f"  DNS: {pc.server_host} → {_ip}")
+            except Exception as _exc:
+                print(f"  ❌ хост не разрешается ({type(_exc).__name__}) — проверь remote_gateway.url и DNS")
+                return 1
             from .deps import sshd_hint as _hint, ensure_dependencies
             dep_ok, dep_notes = ensure_dependencies()
             for n in dep_notes:
