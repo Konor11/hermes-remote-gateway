@@ -125,10 +125,14 @@ class LocalPCAccess:
         base = ["ssh", "-o", "StrictHostKeyChecking=accept-new",
                 "-o", f"ConnectTimeout={timeout}"]
         if password:
-            if not shutil.which("sshpass"):
-                raise RuntimeError("sshpass is required to use --server-password")
-            return _run(["sshpass", "-p", password] + base +
-                        [f"{self.server_user}@{self.server_host}", remote_cmd], timeout=timeout + 15)
+            if shutil.which("sshpass"):
+                return _run(["sshpass", "-p", password] + base +
+                            [f"{self.server_user}@{self.server_host}", remote_cmd], timeout=timeout + 15)
+            # No sshpass: fall back to an INTERACTIVE ssh so the user can type
+            # the password themselves (never stored, never echoed by us).
+            sys.stderr.write("[local-pc] sshpass not found — enter the remote host password:\n")
+            return subprocess.run(base + [f"{self.server_user}@{self.server_host}", remote_cmd],
+                                  text=True, timeout=timeout + 120)
         if _TUNNEL_KEY.exists():
             base += ["-i", str(_TUNNEL_KEY)]
         return _run(base + [f"{self.server_user}@{self.server_host}", remote_cmd], timeout=timeout + 15)
@@ -167,49 +171,62 @@ class LocalPCAccess:
         return True
 
     def apply_server_config(self, apply: bool = True) -> str:
-        """Write the remote host's terminal backend + awareness note. Returns the YAML snippet."""
-        snippet = (
-            "terminal:\n"
-            "  backend: ssh\n"
-            f"  ssh_host: 127.0.0.1\n"
-            f"  ssh_port: {self.port}\n"
-            f"  ssh_user: {self.laptop_user}\n"
-            f"  ssh_key: ~/.ssh/{_SERVER_KEY_BASENAME}\n"
-            f"  cwd: /home/{self.laptop_user}\n"
-            "agent:\n"
-            "  system_prompt: |\n"
-            "    ## Execution host\n"
-            f"    Your terminal and file tools execute on the user's LAPTOP "
-            f"({self.laptop_user}@local-pc) over SSH, NOT on this server. All paths are the "
-            "laptop's paths (its home directory is the working dir). Other Hermes features "
-            "(skills, MCP, browser) still run on the server.\n"
-        )
+        """Configure the remote host's terminal backend + awareness note.
+
+        Uses the host's own `hermes config set` (comments/formatting preserved)
+        instead of rewriting config.yaml, which would destroy the 100KB+ of
+        comments in it.
+        """
+        keys = [
+            ("terminal.backend", "ssh"),
+            ("terminal.ssh_host", "127.0.0.1"),
+            ("terminal.ssh_port", str(self.port)),
+            ("terminal.ssh_user", self.laptop_user),
+            ("terminal.ssh_key", f"~/.ssh/{_SERVER_KEY_BASENAME}"),
+            ("terminal.cwd", "~"),
+            ("agent.system_prompt", self._awareness_note()),
+        ]
+        snippet = "\n".join(f"hermes config set {k} {v!r}" for k, v in keys)
         if not apply:
             return snippet
-        py = (
-            "import yaml,pathlib\n"
-            "p=pathlib.Path.home()/'.hermes'/'config.yaml'\n"
-            "cfg=yaml.safe_load(p.read_text()) or {}\n"
-            "t=cfg.setdefault('terminal',{})\n"
-            f"t.update({{'backend':'ssh','ssh_host':'127.0.0.1','ssh_port':{self.port},"
-            f"'ssh_user':{self.laptop_user!r},'ssh_key':'~/.ssh/{_SERVER_KEY_BASENAME}',"
-            f"'cwd':'/home/{self.laptop_user}'}})\n"
-            "a=cfg.setdefault('agent',{})\n"
-            f"a['system_prompt']=({self._awareness_note()!r})\n"
-            "p.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))\n"
-            "print('CONFIG_APPLIED')\n"
+        # Non-interactive SSH shells don't source ~/.bashrc, so the hermes
+        # launcher (~/.local/bin/hermes) is not on PATH — prepend it.
+        prelude = 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH" && '
+        script = " && ".join(
+            f"hermes config set {_shq(k)} {_shq(v)} >/dev/null 2>&1" for k, v in keys)
+        # Also write the canonical TERMINAL_* env vars into ~/.hermes/.env: the
+        # config keys above are stored, but some are not in the key registry and
+        # the runtime reads ENV first (TERMINAL_ENV, TERMINAL_SSH_*).
+        env_pairs = {
+            "TERMINAL_ENV": "ssh",
+            "TERMINAL_SSH_HOST": "127.0.0.1",
+            "TERMINAL_SSH_PORT": str(self.port),
+            "TERMINAL_SSH_USER": self.laptop_user,
+            "TERMINAL_SSH_KEY": f"/root/.ssh/{_SERVER_KEY_BASENAME}",
+        }
+        env_script = (
+            "python3 - <<'PYEOF'\n"
+            "import pathlib\n"
+            "p = pathlib.Path.home()/'.hermes'/'.env'\n"
+            "lines = p.read_text().splitlines() if p.exists() else []\n"
+            f"pairs = {env_pairs!r}\n"
+            "out = [l for l in lines if l.split('=',1)[0] not in pairs]\n"
+            "out += [f'{k}={v}' for k, v in pairs.items()]\n"
+            "p.write_text('\\n'.join(out) + '\\n')\n"
+            "print('ENV_WRITTEN')\n"
+            "PYEOF"
         )
-        res = self._ssh("python3 - <<'PYEOF'\n" + py + "PYEOF")
-        return snippet + ("\n" + ("applied ✅" if "CONFIG_APPLIED" in res.stdout else
-                                  f"apply failed: {res.stderr.strip()[:200]}"))
+        res = self._ssh(prelude + script + " && echo CONFIG_APPLIED && " + env_script, timeout=90)
+        ok = "CONFIG_APPLIED" in res.stdout and "ENV_WRITTEN" in res.stdout
+        return snippet + ("\n" + ("applied ✅ (config + ~/.hermes/.env)" if ok else
+                                  f"apply failed: {(res.stderr or res.stdout).strip()[:300]}"))
 
     def _awareness_note(self) -> str:
         return (
-            "## Execution host\n"
-            f"Your terminal and file tools execute on the user's LAPTOP ({self.laptop_user}@local-pc) "
-            "over SSH, NOT on this server. All paths you see are the laptop's paths (its home "
-            "directory is the working directory). Other Hermes features (skills, MCP, browser) "
-            "still run on the server."
+            "Execution host: your terminal and file tools run on the user's LAPTOP "
+            f"({self.laptop_user}@local-pc) over SSH, NOT on this server. Every path you see "
+            "is a path on the laptop (its home directory is the working directory). "
+            "Other Hermes features (skills, MCP, browser) still run on the server."
         )
 
     # ---- tunnel ------------------------------------------------------
@@ -280,6 +297,15 @@ class LocalPCAccess:
             _run(["pkill", "-f", f"-R 127.0.0.1:{self.port}:127.0.0.1:{self.ssh_port}"])
 
     # ---- status ------------------------------------------------------
+
+    def verify_chain(self) -> tuple[bool, str]:
+        """From the REMOTE host, SSH *through the tunnel* to the laptop and run a probe."""
+        probe = ("ssh -p %d -i ~/.ssh/%s -o BatchMode=yes -o StrictHostKeyChecking=accept-new "
+                 "-o ConnectTimeout=8 %s@127.0.0.1 'echo TUNNEL_OK; hostname'"
+                 % (self.port, _SERVER_KEY_BASENAME, self.laptop_user))
+        res = self._ssh(probe, timeout=30)
+        out = (res.stdout or "") + (res.stderr or "")
+        return ("TUNNEL_OK" in res.stdout), out.strip()[:300]
 
     def status(self) -> dict:
         return {

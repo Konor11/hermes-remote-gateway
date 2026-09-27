@@ -403,18 +403,29 @@ class RemoteGatewayCLI:
             pc.authorize_server_key_locally(server_pub)
             print("3. ✅ remote host's key authorized here (agent → laptop SSH)")
 
-            snippet = pc.apply_server_config(apply=apply_config)
-            print("4. Remote host config:")
-            for line in snippet.splitlines():
-                print("   " + line)
-
             ok3 = pc.start_tunnel()
-            print(f"5. Reverse tunnel: {'✅ up' if ok3 else '❌ failed'}")
+            print(f"4. Reverse tunnel: {'✅ up' if ok3 else '❌ failed'}")
+            if not ok3:
+                print("   → туннель не поднялся; конфиг сервера НЕ меняю.")
+                return 1
+
+            ok4, probe = pc.verify_chain()
+            print(f"5. Проверка цепочки (сервер → туннель → ноут): {'✅ OK' if ok4 else '❌ FAIL'}")
+            if probe:
+                print(f"   {probe}")
+            if not ok4:
+                print("   → цепочка не работает; конфиг сервера НЕ меняю.")
+                return 1
+
+            snippet = pc.apply_server_config(apply=apply_config)
+            print("6. Конфиг сервера применён:" if apply_config else "6. Конфиг сервера (применить вручную):")
+            for line in snippet.splitlines():
+                print("   " + line.split("applied")[0].rstrip())
 
             print("\nГотово. Дальше: `hermes remote disconnect && hermes remote connect`,")
             print("затем обычный `hermes` — агент будет работать с файлами этого ноута.")
             print("Откат на сервере: hermes config set terminal.backend local")
-            return 0 if ok3 else 1
+            return 0
 
         print(f"Unknown pc action: {action}", file=sys.stderr)
         return 1
