@@ -271,6 +271,13 @@ class RemoteGatewayCLI:
             "--port", str(local_port),
             "--state-file", str(state_file),
         ]
+        if self.config.local_pc_access:
+            daemon_cmd += [
+                "--local-pc",
+                "--local-pc-port", str(self.config.local_pc_ssh_port),
+                "--local-pc-server-user", self.config.local_pc_server_user,
+                "--local-pc-laptop-user", self.config.local_pc_laptop_user,
+            ]
         # Pass credentials via env to avoid leaking them in argv/ps.
         daemon_env = os.environ.copy()
         daemon_env["HERMES_REMOTE_GATEWAY_TOKEN"] = self.config.token
@@ -333,6 +340,84 @@ class RemoteGatewayCLI:
                 capture_output=True, text=True, timeout=20)
         except Exception:
             pass
+
+    # ---- Local-PC access -------------------------------------------
+
+    def _pc(self):
+        from .localpc import LocalPCAccess
+        return LocalPCAccess(
+            self.config.url,
+            port=self.config.local_pc_ssh_port,
+            server_user=self.config.local_pc_server_user,
+            laptop_user=self.config.local_pc_laptop_user,
+        )
+
+    async def local_pc(self, action: str, server_password: str = "",
+                       apply_config: bool = True) -> int:
+        """Manage local-PC access (remote agent runs on THIS laptop)."""
+        pc = self._pc()
+
+        if action == "status":
+            st = pc.status()
+            print(f"Local-PC access (agent executes on THIS laptop)")
+            print(f"  Remote host:  {st['server']}")
+            print(f"  Laptop user:  {st['laptop_user']}")
+            print(f"  Reverse port: 127.0.0.1:{st['port']} (on remote host)")
+            print(f"  sshd here:    {'✅ listening' if st['sshd'] else '❌ not running'}")
+            print(f"  Tunnel:       {'✅ up' if st['tunnel'] else '❌ down'}")
+            print(f"  Tunnel key:   {'✅' if st['tunnel_key'] else '❌ missing'}")
+            print(f"  Enabled in config: {'✅' if self.config.local_pc_access else '❌ (set remote_gateway.local_pc_access: true)'}")
+            return 0
+
+        if action == "on":
+            ok = pc.start_tunnel()
+            print("🚇 Reverse tunnel " + ("started ✅" if ok else "failed ❌ (see "
+                  + str(pc.status()) + ")"))
+            return 0 if ok else 1
+
+        if action == "off":
+            pc.stop_tunnel()
+            print("🚇 Reverse tunnel stopped")
+            return 0
+
+        if action == "setup":
+            ok, msg = pc.ensure_sshd()
+            print(f"1. sshd: {msg}")
+            if not ok:
+                print("   → install/enable sshd, then re-run `hermes remote pc setup`")
+                return 1
+
+            key = pc.ensure_tunnel_key()
+            print(f"2. tunnel key: {key}")
+
+            if not pc.install_tunnel_key_on_server(password=server_password):
+                print("   ❌ could not install the tunnel key on the remote host.")
+                print("      If the host uses password auth, pass --server-password.")
+                return 1
+            print("   ✅ tunnel key installed on the remote host")
+
+            ok2, server_pub = pc.server_agent_key()
+            if not ok2:
+                print("   ❌ could not create the remote host's access key")
+                return 1
+            pc.authorize_server_key_locally(server_pub)
+            print("3. ✅ remote host's key authorized here (agent → laptop SSH)")
+
+            snippet = pc.apply_server_config(apply=apply_config)
+            print("4. Remote host config:")
+            for line in snippet.splitlines():
+                print("   " + line)
+
+            ok3 = pc.start_tunnel()
+            print(f"5. Reverse tunnel: {'✅ up' if ok3 else '❌ failed'}")
+
+            print("\nГотово. Дальше: `hermes remote disconnect && hermes remote connect`,")
+            print("затем обычный `hermes` — агент будет работать с файлами этого ноута.")
+            print("Откат на сервере: hermes config set terminal.backend local")
+            return 0 if ok3 else 1
+
+        print(f"Unknown pc action: {action}", file=sys.stderr)
+        return 1
 
     async def disconnect_remote(self) -> int:
         """Stop the proxy daemon and remove HERMES_TUI_GATEWAY_URL from .env
@@ -478,6 +563,17 @@ def create_parser() -> argparse.ArgumentParser:
     
     # disconnect command
     disconnect_parser = subparsers.add_parser("disconnect", help="Disconnect from gateway")
+
+    # pc command — expose THIS laptop to the remote agent
+    pc_parser = subparsers.add_parser("pc", help="Let the remote agent run commands/read files on THIS laptop")
+    pc_parser.add_argument("pc_action", nargs="?", default="status",
+                           choices=["setup", "status", "on", "off"])
+    pc_parser.add_argument("--server-password", help="SSH password on the remote host (one-time, not stored)")
+    pc_parser.add_argument("--no-apply", action="store_true", help="Do not write the remote config")
+    pc_parser.add_argument("--url", help="Remote gateway URL")
+    pc_parser.add_argument("--local-pc-port", type=int, help="Loopback port on the remote host")
+    pc_parser.add_argument("--local-pc-server-user", help="SSH user on the remote host")
+    pc_parser.add_argument("--local-pc-laptop-user", help="SSH user on THIS laptop")
     
     # config command
     config_parser = subparsers.add_parser("config", help="Show current configuration")
@@ -495,6 +591,11 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
         username=args.username or base_config.username,
         password=args.password or base_config.password,
         profile=args.profile or base_config.profile,
+        local_pc_access=getattr(args, "local_pc", None) if getattr(args, "local_pc", None) is not None
+        else base_config.local_pc_access,
+        local_pc_ssh_port=getattr(args, "local_pc_port", None) or base_config.local_pc_ssh_port,
+        local_pc_server_user=getattr(args, "local_pc_server_user", None) or base_config.local_pc_server_user,
+        local_pc_laptop_user=getattr(args, "local_pc_laptop_user", None) or base_config.local_pc_laptop_user,
     )
     
     # Validate
@@ -540,6 +641,13 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
             print("🔌 Disconnected from remote gateway")
             return code
             
+        elif args.remote_command == "pc":
+            return await cli.local_pc(
+                getattr(args, "pc_action", "status") or "status",
+                server_password=getattr(args, "server_password", "") or "",
+                apply_config=not getattr(args, "no_apply", False),
+            )
+
         elif args.remote_command == "config":
             print("Current configuration:")
             print(f"  URL: {config.url}")

@@ -37,6 +37,10 @@ def register(ctx) -> None:
         connect_parser.add_argument("--username", help="Username (for basic auth)")
         connect_parser.add_argument("--password", help="Password (for basic auth)")
         connect_parser.add_argument("--profile", help="Remote profile name")
+        connect_parser.add_argument("--local-pc", dest="local_pc", action="store_true",
+                                    default=None, help="Also expose THIS laptop to the remote agent (reverse SSH tunnel)")
+        connect_parser.add_argument("--no-local-pc", dest="local_pc", action="store_false",
+                                    default=None, help="Disable local-PC access for this run")
         
         # chat command
         chat_parser = remote_subparsers.add_parser("chat", help="Send a single query (oneshot mode)")
@@ -55,6 +59,21 @@ def register(ctx) -> None:
         
         # disconnect command
         disconnect_parser = remote_subparsers.add_parser("disconnect", help="Disconnect from gateway")
+
+        # pc command — expose THIS laptop to the remote agent
+        pc_parser = remote_subparsers.add_parser(
+            "pc", help="Let the remote agent run commands/read files on THIS laptop")
+        pc_parser.add_argument("pc_action", nargs="?", default="status",
+                               choices=["setup", "status", "on", "off"],
+                               help="setup | status | on | off")
+        pc_parser.add_argument("--server-password",
+                               help="SSH password on the remote host (one-time setup only; not stored)")
+        pc_parser.add_argument("--no-apply", action="store_true",
+                               help="Do not write the remote host's config automatically")
+        pc_parser.add_argument("--url", help="Remote gateway URL")
+        pc_parser.add_argument("--local-pc-port", type=int, help="Loopback port on the remote host")
+        pc_parser.add_argument("--local-pc-server-user", help="SSH user on the remote host")
+        pc_parser.add_argument("--local-pc-laptop-user", help="SSH user on THIS laptop")
         
         # config command
         config_parser = remote_subparsers.add_parser("config", help="Show current configuration")

@@ -27,6 +27,13 @@ class RemoteGatewayConfig:
     request_timeout: float = 300.0
     # If true, HERMES_TUI_GATEWAY_URL is used to launch native TUI (Путь 2).
     native_tui: bool = True
+    # --- Local-PC access: remote agent executes on THIS laptop ---
+    # When enabled, `remote connect` also brings up a reverse SSH tunnel so the
+    # remote Hermes terminal/file tools run here instead of on the server.
+    local_pc_access: bool = False
+    local_pc_ssh_port: int = 2222        # loopback port opened on the REMOTE host
+    local_pc_server_user: str = "root"   # ssh user on the remote host
+    local_pc_laptop_user: str = ""       # ssh user on THIS laptop (default: $USER)
 
     def __post_init__(self):
         # Read from env vars if not set
@@ -55,6 +62,10 @@ class RemoteGatewayConfig:
             reconnect_delay=rg.get("reconnect_delay", 2.0),
             oauth_callback_port=rg.get("oauth_callback_port", 43827),
             native_tui=rg.get("native_tui", True),
+            local_pc_access=rg.get("local_pc_access", False),
+            local_pc_ssh_port=rg.get("local_pc_ssh_port", 2222),
+            local_pc_server_user=rg.get("local_pc_server_user", "root"),
+            local_pc_laptop_user=rg.get("local_pc_laptop_user", ""),
         )
 
     def to_dict(self) -> dict:

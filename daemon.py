@@ -344,6 +344,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--password", default="")
     parser.add_argument("--port", type=int, default=43827)
     parser.add_argument("--state-file", default="")
+    # Local-PC access: keep a reverse SSH tunnel up so the remote agent's
+    # terminal/file tools execute on THIS laptop.
+    parser.add_argument("--local-pc", action="store_true")
+    parser.add_argument("--local-pc-port", type=int, default=2222)
+    parser.add_argument("--local-pc-server-user", default="root")
+    parser.add_argument("--local-pc-laptop-user", default="")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO)
@@ -358,6 +364,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     state_file = Path(args.state_file) if args.state_file else _default_state_file()
     proxy = RemoteGatewayProxy(config, state_file=state_file)
+
+    if args.local_pc:
+        # Supervise the reverse tunnel in a daemon thread: restart on drops for
+        # the whole lifetime of the proxy.
+        def _tunnel_supervisor() -> None:
+            from .localpc import LocalPCAccess
+            access = LocalPCAccess(
+                config.url, port=args.local_pc_port,
+                server_user=args.local_pc_server_user,
+                laptop_user=args.local_pc_laptop_user)
+            _log.info("[daemon] local-pc tunnel supervisor starting (%s -> 127.0.0.1:%d)",
+                      access.server_host, access.port)
+            access.supervise()
+
+        import threading as _threading
+        _threading.Thread(target=_tunnel_supervisor, name="local-pc-tunnel", daemon=True).start()
+
     return proxy.start()
 
 
