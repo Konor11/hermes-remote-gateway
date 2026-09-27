@@ -381,6 +381,8 @@ class RemoteGatewayCLI:
             "--port", str(local_port),
             "--state-file", str(state_file),
         ]
+        if self.config.profile:
+            daemon_cmd += ["--profile", self.config.profile]
         if self.config.local_pc_access:
             daemon_cmd += [
                 "--local-pc",

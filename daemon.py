@@ -101,6 +101,17 @@ class RemoteGatewayProxy:
                 params.pop("provider", None)
                 frame = dict(frame)
                 frame["params"] = params
+        # Bind the remote session to the configured profile. The gateway reads
+        # params["profile"] (as profile-scoped methods do) to pick HERMES_HOME;
+        # without it `--profile laptop` would be silently ignored and the
+        # session would run under the DEFAULT profile of the remote host.
+        profile = getattr(self.config, "profile", "") or ""
+        if (profile and isinstance(params, dict) and isinstance(method, str)
+                and method.split(".")[0] in ("session", "prompt", "config", "mcp")):
+            params = dict(params)
+            params["profile"] = profile
+            frame = dict(frame)
+            frame["params"] = params
         return (True, frame)
 
     # ---- WebSocket tunnel to remote gateway ------------------------
@@ -344,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--password", default="")
     parser.add_argument("--port", type=int, default=43827)
     parser.add_argument("--state-file", default="")
+    parser.add_argument("--profile", default="",
+                        help="Remote profile to bind the session to")
     # Local-PC access: keep a reverse SSH tunnel up so the remote agent's
     # terminal/file tools execute on THIS laptop.
     parser.add_argument("--local-pc", action="store_true")
@@ -361,6 +374,7 @@ def main(argv: list[str] | None = None) -> int:
         username=args.username,
         password=args.password,
         oauth_callback_port=args.port,
+        profile=args.profile,
     )
     state_file = Path(args.state_file) if args.state_file else _default_state_file()
     proxy = RemoteGatewayProxy(config, state_file=state_file)

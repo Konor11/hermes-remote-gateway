@@ -65,8 +65,11 @@ def server_ssh_host(url: str) -> str:
 class LocalPCAccess:
     """Reverse-tunnel manager + one-time setup for local-PC access."""
 
+    PROFILE_NAME = "laptop"
+
     def __init__(self, url: str, port: int = 2222, server_user: str = "root",
-                 laptop_user: str = "", ssh_port: int = 22):
+                 laptop_user: str = "", ssh_port: int = 22, profile: str = ""):
+        self.profile = profile or self.PROFILE_NAME
         self.url = url
         self.port = port                       # loopback port on the REMOTE host
         self.server_user = server_user or "root"
@@ -171,55 +174,67 @@ class LocalPCAccess:
         return True
 
     def apply_server_config(self, apply: bool = True) -> str:
-        """Configure the remote host's terminal backend + awareness note.
+        """Scope local-PC access to a DEDICATED remote profile.
 
-        Uses the host's own `hermes config set` (comments/formatting preserved)
-        instead of rewriting config.yaml, which would destroy the 100KB+ of
-        comments in it.
+        Writing ``terminal.backend: ssh`` into the ROOT config would hijack every
+        session on that host — including the Telegram bots that will live there.
+        A named profile has its own HERMES_HOME (``~/.hermes/profiles/<name>``)
+        with its own config.yaml and .env, so the change stays inside it.
+
+        ``hermes config set`` is used (never a YAML rewrite) so the host's 100KB+
+        of config comments survive.
         """
-        keys = [
-            ("terminal.backend", "ssh"),
-            ("terminal.ssh_host", "127.0.0.1"),
-            ("terminal.ssh_port", str(self.port)),
-            ("terminal.ssh_user", self.laptop_user),
-            ("terminal.ssh_key", f"~/.ssh/{_SERVER_KEY_BASENAME}"),
-            ("terminal.cwd", "~"),
-            ("agent.system_prompt", self._awareness_note()),
-        ]
-        snippet = "\n".join(f"hermes config set {k} {v!r}" for k, v in keys)
-        if not apply:
-            return snippet
-        # Non-interactive SSH shells don't source ~/.bashrc, so the hermes
-        # launcher (~/.local/bin/hermes) is not on PATH — prepend it.
-        prelude = 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH" && '
-        script = " && ".join(
-            f"hermes config set {_shq(k)} {_shq(v)} >/dev/null 2>&1" for k, v in keys)
-        # Also write the canonical TERMINAL_* env vars into ~/.hermes/.env: the
-        # config keys above are stored, but some are not in the key registry and
-        # the runtime reads ENV first (TERMINAL_ENV, TERMINAL_SSH_*).
+        profile = self.profile
+        prof_home = f"$HOME/.hermes/profiles/{profile}"
+        server_home = "/root" if self.server_user == "root" else f"/home/{self.server_user}"
+        key_path = f"{server_home}/.ssh/{_SERVER_KEY_BASENAME}"
         env_pairs = {
             "TERMINAL_ENV": "ssh",
             "TERMINAL_SSH_HOST": "127.0.0.1",
             "TERMINAL_SSH_PORT": str(self.port),
             "TERMINAL_SSH_USER": self.laptop_user,
-            "TERMINAL_SSH_KEY": f"/root/.ssh/{_SERVER_KEY_BASENAME}",
+            "TERMINAL_SSH_KEY": key_path,
         }
+        keys = [
+            ("terminal.backend", "ssh"),
+            ("terminal.ssh_host", "127.0.0.1"),
+            ("terminal.ssh_port", str(self.port)),
+            ("terminal.ssh_user", self.laptop_user),
+            ("terminal.ssh_key", key_path),
+            ("agent.system_prompt", self._awareness_note()),
+        ]
+        snippet = (f"# scoped to profile '{profile}' — root config untouched\n"
+                   + "\n".join(f"hermes config set {k} {v!r}" for k, v in keys))
+        if not apply:
+            return snippet
+        # Non-interactive SSH shells don't source ~/.bashrc, so the hermes
+        # launcher (~/.local/bin/hermes) is not on PATH — prepend it.
+        prelude = 'export PATH="$HOME/.local/bin:/usr/local/bin:$PATH" && '
+        create = (f'[ -d "$HOME/.hermes/profiles/{profile}" ] || '
+                  f'hermes profile create {_shq(profile)} >/dev/null 2>&1; ')
+        script = " && ".join(
+            f"HERMES_HOME=$HOME/.hermes/profiles/{profile} "
+            f"hermes config set {_shq(k)} {_shq(v)} >/dev/null 2>&1" for k, v in keys)
         env_script = (
-            "python3 - <<'PYEOF'\n"
+            "python3 - <<'ENVEOF'\n"
             "import pathlib\n"
-            "p = pathlib.Path.home()/'.hermes'/'.env'\n"
+            "p = pathlib.Path.home()/'.hermes'/'profiles'/'PROFILENAME'/'.env'\n"
+            "p.parent.mkdir(parents=True, exist_ok=True)\n"
             "lines = p.read_text().splitlines() if p.exists() else []\n"
-            f"pairs = {env_pairs!r}\n"
-            "out = [l for l in lines if l.split('=',1)[0] not in pairs]\n"
+            "pairs = PAIRS\n"
+            "out = [l for l in lines if l.split('=', 1)[0] not in pairs]\n"
             "out += [f'{k}={v}' for k, v in pairs.items()]\n"
             "p.write_text('\\n'.join(out) + '\\n')\n"
+            "p.chmod(0o600)\n"
             "print('ENV_WRITTEN')\n"
-            "PYEOF"
-        )
-        res = self._ssh(prelude + script + " && echo CONFIG_APPLIED && " + env_script, timeout=90)
+            "ENVEOF"
+        ).replace("PROFILENAME", profile).replace("PAIRS", repr(env_pairs))
+        res = self._ssh(prelude + create + script + " && echo CONFIG_APPLIED && " + env_script,
+                        timeout=150)
         ok = "CONFIG_APPLIED" in res.stdout and "ENV_WRITTEN" in res.stdout
-        return snippet + ("\n" + ("applied ✅ (config + ~/.hermes/.env)" if ok else
-                                  f"apply failed: {(res.stderr or res.stdout).strip()[:300]}"))
+        return snippet + ("\n" + (
+            f"applied ✅ (profile '{profile}': config + .env; root config untouched)"
+            if ok else f"apply failed: {(res.stderr or res.stdout).strip()[:300]}"))
 
     def _awareness_note(self) -> str:
         return (
