@@ -731,6 +731,18 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
         local_pc_server_user=getattr(args, "local_pc_server_user", None) or base_config.local_pc_server_user,
         local_pc_laptop_user=getattr(args, "local_pc_laptop_user", None) or base_config.local_pc_laptop_user,
     )
+    # Local-PC access needs the remote session bound to the profile that carries
+    # `terminal.backend: ssh` (see localpc.PROFILE_NAME). Default it here so the
+    # everyday command stays exactly `hermes remote connect` — no extra flag.
+    if not config.profile and config.local_pc_access:
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+        try:
+            from localpc import LocalPCAccess as _LPCA
+            config.profile = _LPCA.PROFILE_NAME
+        except Exception:
+            pass
     
     # Validate
     valid, error = config.validate()
