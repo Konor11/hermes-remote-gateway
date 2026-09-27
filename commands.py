@@ -211,6 +211,76 @@ class RemoteGatewayCLI:
         base["state"] = "connected" if connected else "disconnected"
         return base
     
+
+    UNIT_NAME = "hermes-remote-gateway.service"
+
+    def _start_systemd_unit(self, daemon_cmd, daemon_env, home) -> bool:
+        """Enable+start the proxy as a systemd --user unit (survives logout).
+
+        Falls back to a plain detached process (returns False) when systemd
+        --user is unavailable — e.g. inside a container without a user bus.
+        """
+        import shlex
+        try:
+            subprocess.run(["systemctl", "--user", "show-environment"],
+                           capture_output=True, timeout=10, check=True)
+        except Exception:
+            return False
+        try:
+            unit_dir = Path.home() / ".config" / "systemd" / "user"
+            cfg_dir = Path.home() / ".config" / "hermes-remote-gateway"
+            unit_dir.mkdir(parents=True, exist_ok=True)
+            cfg_dir.mkdir(parents=True, exist_ok=True)
+            # Credentials live in a 0600 EnvironmentFile, never in the unit text
+            # (unit files are world-readable by default).
+            env_lines = [f"{k}={daemon_env[k]}" for k in (
+                "HERMES_REMOTE_GATEWAY_TOKEN",
+                "HERMES_REMOTE_GATEWAY_USERNAME",
+                "HERMES_REMOTE_GATEWAY_PASSWORD") if daemon_env.get(k)]
+            envf = cfg_dir / "daemon.env"
+            envf.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+            envf.chmod(0o600)
+            log = home / "remote-gateway-daemon.log"
+            unit = (
+                "[Unit]\n"
+                "Description=Hermes remote gateway WS proxy (plugin)\n"
+                "After=network-online.target\n\n"
+                "[Service]\n"
+                "Type=simple\n"
+                f"EnvironmentFile={envf}\n"
+                f"ExecStart={shlex.join(daemon_cmd)}\n"
+                "Restart=always\n"
+                "RestartSec=3\n"
+                f"StandardOutput=append:{log}\n"
+                f"StandardError=append:{log}\n\n"
+                "[Install]\n"
+                "WantedBy=default.target\n"
+            )
+            (unit_dir / self.UNIT_NAME).write_text(unit, encoding="utf-8")
+            subprocess.run(["systemctl", "--user", "daemon-reload"],
+                           capture_output=True, timeout=15)
+            r = subprocess.run(["systemctl", "--user", "enable", "--now", self.UNIT_NAME],
+                               capture_output=True, timeout=30)
+            return r.returncode == 0
+        except Exception:
+            return False
+
+    def _stop_systemd_unit(self) -> None:
+        """Remove the autostart unit so a reboot does not bring the proxy back."""
+        try:
+            subprocess.run(["systemctl", "--user", "disable", "--now", self.UNIT_NAME],
+                           capture_output=True, timeout=25)
+        except Exception:
+            pass
+        try:
+            unit = Path.home() / ".config" / "systemd" / "user" / self.UNIT_NAME
+            if unit.exists():
+                unit.unlink()
+            subprocess.run(["systemctl", "--user", "daemon-reload"],
+                           capture_output=True, timeout=15)
+        except Exception:
+            pass
+
     async def _connect_direct(self, env_file) -> int:
         """DIRECT mode: point the TUI at the DOMAIN itself, no local proxy."""
         import subprocess
@@ -300,7 +370,9 @@ class RemoteGatewayCLI:
         except Exception as e:
             raise RuntimeError(f"Authentication failed: {e}")
 
-        # 3. Spawn the proxy daemon (detached; persists after this process).
+        # 3. Start the proxy daemon. Prefer a systemd --user unit so it comes
+        #    back after logout/reboot (otherwise a bare `hermes` after a reboot
+        #    silently falls back to LOCAL Hermes).
         daemon_module = Path(__file__).resolve().parent / "daemon.py"
         daemon_cmd = [
             sys.executable, str(daemon_module),
@@ -322,29 +394,32 @@ class RemoteGatewayCLI:
         daemon_env["HERMES_REMOTE_GATEWAY_USERNAME"] = self.config.username
         daemon_env["HERMES_REMOTE_GATEWAY_PASSWORD"] = self.config.password
 
-        # Detach: start in background, don't wait (like a system service).
-        # Log stderr/stdout to a file for debugging (was DEVNULL — we were blind
-        # to daemon errors and to whether the TUI ever connected).
-        daemon_log = (home / "remote-gateway-daemon.log").open("ab")
-        proc = subprocess.Popen(
-            daemon_cmd, env=daemon_env,
-            stdout=daemon_log, stderr=daemon_log,
-            start_new_session=True,
-        )
-        print(f"  → daemon pid {proc.pid}, log {home / 'remote-gateway-daemon.log'}")
+        proc = None
+        if self._start_systemd_unit(daemon_cmd, daemon_env, home):
+            print("  → autostart: systemd --user (survives logout/reboot)")
+        else:
+            # Fallback: detached child process (this session only).
+            daemon_log = (home / "remote-gateway-daemon.log").open("ab")
+            proc = subprocess.Popen(
+                daemon_cmd, env=daemon_env,
+                stdout=daemon_log, stderr=daemon_log,
+                start_new_session=True,
+            )
+            print(f"  → daemon pid {proc.pid}, log {home / 'remote-gateway-daemon.log'}")
 
         # 4. Wait for the daemon to signal readiness.
-        deadline = time.time() + 30
+        deadline = time.time() + 45
         while time.time() < deadline:
             if ready_file.exists():
                 break
-            if proc.poll() is not None:
+            if proc is not None and proc.poll() is not None:
                 raise RuntimeError(
                     f"Proxy daemon exited early (code {proc.returncode}). "
-                    "Check that hermes_cli.remote_gateway.daemon is importable.")
+                    "Check the log at ~/.hermes/remote-gateway-daemon.log")
             await asyncio.sleep(0.25)
         else:
-            proc.terminate()
+            if proc is not None:
+                proc.terminate()
             raise RuntimeError("Timed out waiting for the proxy daemon to start")
 
         # 5. Write HERMES_TUI_GATEWAY_URL into .env so a plain `hermes`
@@ -480,6 +555,10 @@ class RemoteGatewayCLI:
         ready_file = home / "remote-gateway-ready"
         state_file = home / "remote-gateway.json"
         stop_file = state_file.with_suffix(".stop")
+
+        # 0. Remove autostart first, else systemd would restart the daemon
+        #    right after we kill it (and a reboot would bring it back).
+        self._stop_systemd_unit()
 
         # 1. Signal the daemon to stop (it writes remote-gateway-ready after
         #    startup; daemon also watches for the .stop marker).
