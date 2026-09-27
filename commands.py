@@ -713,6 +713,23 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def local_pc_profile() -> str:
+    """Name of the remote profile that carries local-PC access.
+
+    Falls back to a literal so a broken import can never leave the profile empty
+    (an empty profile would silently run the agent on the SERVER while the user
+    expects their laptop).
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    try:
+        from localpc import LocalPCAccess
+        return LocalPCAccess.PROFILE_NAME
+    except Exception:
+        return "laptop"
+
+
 async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig) -> int:
     """Run a command with given arguments"""
     # Override config with CLI args
@@ -734,15 +751,8 @@ async def run_command(args: argparse.Namespace, base_config: RemoteGatewayConfig
     # Local-PC access needs the remote session bound to the profile that carries
     # `terminal.backend: ssh` (see localpc.PROFILE_NAME). Default it here so the
     # everyday command stays exactly `hermes remote connect` — no extra flag.
-    if not config.profile and config.local_pc_access:
-        import sys as _sys
-        from pathlib import Path as _Path
-        _sys.path.insert(0, str(_Path(__file__).resolve().parent))
-        try:
-            from localpc import LocalPCAccess as _LPCA
-            config.profile = _LPCA.PROFILE_NAME
-        except Exception:
-            pass
+    if config.local_pc_access and (config.profile or "default") in ("", "default"):
+        config.profile = local_pc_profile()
     
     # Validate
     valid, error = config.validate()
