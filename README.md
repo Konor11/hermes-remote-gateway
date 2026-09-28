@@ -127,14 +127,30 @@ hermes remote pc deps        # только зависимости
 hermes remote pc on|off      # поднять/остановить туннель
 ```
 
-Откат:
+### Откат
+
+**Обычный (с ноута)** — возвращает агента на сервер:
 
 ```bash
-# на сервере
-hermes config set terminal.backend local
-# на ноуте
-hermes remote pc off
+hermes remote pc off                                   # остановить обратный туннель
+hermes config set remote_gateway.local_pc_access false  # снять авто-подстановку профиля
 ```
+
+Корневой конфиг сервера при этом не трогается — он как был `terminal.backend: "local"`, так и
+остался: `ssh` прописывается **только** в профиль `laptop`.
+
+**Полная уборка на сервере** (если профиль больше не нужен):
+
+```bash
+HERMES_HOME=$HOME/.hermes/profiles/laptop hermes config set terminal.backend local
+hermes profile delete laptop
+```
+
+> Важно: `hermes config set terminal.backend local` **без** `HERMES_HOME=...` для этого плагина
+> ничего не откатывает — в корневом конфиге никогда не было `ssh`.
+
+**Вернуть обратно:** `hermes remote pc setup` — идемпотентна, повторит все шаги (зависимости,
+ключи, туннель, конфиг профиля).
 
 ## Аутентификация
 

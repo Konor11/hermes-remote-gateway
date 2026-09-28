@@ -115,6 +115,22 @@ including Telegram bots on `default`); everything lands in `~/.hermes/profiles/l
 With `local_pc_access: true` the `laptop` profile is auto-bound when no other profile is set —
 the everyday command stays plain `hermes remote connect`.
 
+### Reverting
+
+```bash
+# from the laptop — puts the agent back on the server
+hermes remote pc off
+hermes config set remote_gateway.local_pc_access false
+
+# on the server, only if the profile itself should go away
+HERMES_HOME=$HOME/.hermes/profiles/laptop hermes config set terminal.backend local
+hermes profile delete laptop
+```
+
+`hermes config set terminal.backend local` WITHOUT `HERMES_HOME=...` reverts nothing here: the
+root config never held `ssh` (`ssh` is written to the `laptop` profile only). To re-apply,
+`hermes remote pc setup` is idempotent.
+
 ## Protocol
 
 Same WebSocket protocol as Hermes Desktop:
