@@ -11,7 +11,7 @@ requirements = (this_directory / "requirements.txt").read_text().strip().split("
 
 setup(
     name="hermes-remote-gateway",
-    version="0.1.0",
+    version="0.2.0",
     author="DKTunnel",
     author_email="",
     description="CLI plugin to connect Hermes CLI to a remote Hermes gateway via WebSocket",

@@ -1,5 +1,5 @@
 name: hermes-remote-gateway
-version: "0.1.0"
+version: "0.2.0"
 description: "CLI plugin to connect Hermes CLI to a remote Hermes gateway via WebSocket with OAuth/Token/Basic Auth"
 author: "DKTunnel"
 license: "MIT"
@@ -37,6 +37,26 @@ config_schema:
         type: string
         description: "Remote profile name"
         default: "default"
+      direct:
+        type: boolean
+        description: "Point the TUI straight at the domain (no local proxy). Dashboard must be ungated."
+        default: false
+      local_pc_access:
+        type: boolean
+        description: "Let the remote agent run terminal/file tools on THIS laptop (reverse SSH tunnel)"
+        default: false
+      local_pc_ssh_port:
+        type: integer
+        description: "Loopback port on the remote host that forwards to this laptop's sshd"
+        default: 2222
+      local_pc_server_user:
+        type: string
+        description: "SSH user on the remote host (used to install the tunnel key)"
+        default: "root"
+      local_pc_laptop_user:
+        type: string
+        description: "SSH user on THIS laptop (default: $USER)"
+        default: ""
       auto_reconnect:
         type: boolean
         description: "Auto-reconnect on disconnect"
