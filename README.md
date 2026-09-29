@@ -34,6 +34,15 @@ hermes remote disconnect
 
 ## Установка
 
+Одна команда — сама склонирует плагин, поставит зависимости, спросит адрес и подключится:
+
+```bash
+git clone https://github.com/Konor11/hermes-remote-gateway.git /tmp/hrg && bash /tmp/hrg/setup.sh
+rm -rf /tmp/hrg
+```
+
+Скрипт спросит только URL и способ входа. Несколько шагов вручную — только если нужно явнее:
+
 ```bash
 git clone https://github.com/Konor11/hermes-remote-gateway.git \
   ~/.hermes/plugins/hermes-remote-gateway
@@ -43,6 +52,14 @@ bash install.sh                 # системные зависимости: ssh
 
 hermes plugins enable hermes-remote-gateway
 hermes remote --help
+```
+
+Полезно знать:
+
+```bash
+bash setup.sh --check                        # что уже установлено и работает (ничего не меняет)
+bash setup.sh --url https://… --auth oauth   # без вопросов
+bash setup.sh --local-pc --server-password '…'  # сразу с доступом к файлам ноута
 ```
 
 > **Ставьте клоном, а не `hermes plugins install`.** Инсталлятор Hermes гоняет плагин через

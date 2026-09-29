@@ -29,6 +29,21 @@ laptop's shell and files to the remote agent over a reverse SSH tunnel.
 
 ## Installation
 
+One command — clones, installs deps, asks for the URL, connects:
+
+```bash
+git clone https://github.com/Konor11/hermes-remote-gateway.git /tmp/hrg && bash /tmp/hrg/setup.sh
+rm -rf /tmp/hrg
+```
+
+```bash
+bash setup.sh --check                             # what is installed/working (read-only)
+bash setup.sh --url https://… --auth oauth        # non-interactive
+bash setup.sh --local-pc --server-password '…'    # also expose this laptop's files
+```
+
+Step by step (when you want it explicit):
+
 ```bash
 git clone https://github.com/Konor11/hermes-remote-gateway.git \
   ~/.hermes/plugins/hermes-remote-gateway
