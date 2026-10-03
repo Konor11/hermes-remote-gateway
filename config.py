@@ -19,7 +19,13 @@ class RemoteGatewayConfig:
     reconnect_attempts: int = 5
     reconnect_delay: float = 2.0
     # OAuth specific
+    # Local proxy port (the WS endpoint the TUI attaches to).
     oauth_callback_port: int = 43827
+    # OAuth callback port — deliberately DIFFERENT from the proxy port: the
+    # autostarted proxy already holds the proxy port, and binding a second
+    # server there fails with EADDRINUSE, which is what made the OAuth flow
+    # hang until timeout while the browser said "Authorization successful".
+    oauth_http_port: int = 43828
     # Connection
     ping_interval: float = 30.0
     ping_timeout: float = 10.0
@@ -64,6 +70,7 @@ class RemoteGatewayConfig:
             reconnect_attempts=rg.get("reconnect_attempts", 5),
             reconnect_delay=rg.get("reconnect_delay", 2.0),
             oauth_callback_port=rg.get("oauth_callback_port", 43827),
+            oauth_http_port=rg.get("oauth_http_port", 43828),
             native_tui=rg.get("native_tui", True),
             local_pc_access=rg.get("local_pc_access", False),
             local_pc_ssh_port=rg.get("local_pc_ssh_port", 2222),

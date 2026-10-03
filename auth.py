@@ -40,10 +40,25 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
     """HTTP handler for OAuth callback"""
     
     def __init__(self, *args, callback_event: asyncio.Event = None, 
-                 auth_code: Dict = None, **kwargs):
+                 auth_code: Dict = None, loop: asyncio.AbstractEventLoop = None, **kwargs):
         self.callback_event = callback_event
         self.auth_code = auth_code
+        # The server runs in an executor thread, so waking the waiter must go
+        # through call_soon_threadsafe. A bare Event.set() from this thread sets
+        # the flag but never wakes the loop's future — the flow then just sits
+        # there until the timeout, while the browser already showed
+        # "Authorization successful".
+        self.loop = loop
         super().__init__(*args, **kwargs)
+
+    def _wake(self) -> None:
+        """Wake the awaiting coroutine from this (non-loop) thread."""
+        if not self.callback_event:
+            return
+        if self.loop is None:
+            self.callback_event.set()
+            return
+        self.loop.call_soon_threadsafe(self.callback_event.set)
     
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -62,16 +77,14 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
                 <script>window.close();</script>
                 </body></html>
                 """)
-                if self.callback_event:
-                    self.callback_event.set()
+                self._wake()
                 return
             elif "error" in params:
                 self.auth_code["error"] = params["error"][0]
                 self.auth_code["error_description"] = params.get("error_description", [""])[0]
                 self.send_response(400)
                 self.end_headers()
-                if self.callback_event:
-                    self.callback_event.set()
+                self._wake()
                 return
         
         self.send_response(404)
@@ -88,7 +101,9 @@ class RemoteGatewayAuth:
         self.config = config
         self._oauth_tokens: Dict[str, Any] = {}
         self._session_cookies: List[Dict[str, str]] = []
-        self._callback_port = config.oauth_callback_port
+        # OAuth callback gets its own port — never the proxy's (see config).
+        self._callback_port = (getattr(config, "oauth_http_port", 0)
+                               or config.oauth_callback_port)
     
     def _generate_pkce_pair(self) -> PKCEPair:
         """Generate PKCE verifier/challenge pair (RFC 7636 S256)"""
@@ -318,14 +333,35 @@ class RemoteGatewayAuth:
         pkce = self._generate_pkce_pair()
         state = secrets.token_urlsafe(24)
         
-        # Start local callback server
-        callback_url = f"http://127.0.0.1:{self._callback_port}/callback"
         auth_code = {}
         callback_event = asyncio.Event()
-        
-        server = HTTPServer(("127.0.0.1", self._callback_port), 
-                           lambda *args, **kwargs: OAuthCallbackHandler(*args, 
-                           callback_event=callback_event, auth_code=auth_code, **kwargs))
+        _loop = asyncio.get_event_loop()
+
+        # Start local callback server. Use a DEDICATED port, never the proxy
+        # port: the systemd-autostarted proxy already owns 43827, so binding
+        # the callback server there raised "Address already in use" (and, if the
+        # exception was swallowed, the browser had no server to hand the code
+        # back to — the flow then just waited until it timed out).
+        import socket as _sock
+        for _port in (self._callback_port, 0):   # configured port, else any free one
+            try:
+                server = HTTPServer(("127.0.0.1", _port),
+                                    lambda *args, **kwargs: OAuthCallbackHandler(
+                                        *args, callback_event=callback_event,
+                                        auth_code=auth_code, loop=_loop, **kwargs))
+                break
+            except OSError as _exc:
+                server = None
+                if _port != 0:
+                    print(f"   ⚠ порт {_port} занят ({_exc.strerror}) — "
+                          f"беру свободный для OAuth-колбэка")
+        if server is None:
+            raise RuntimeError("could not bind an OAuth callback port on 127.0.0.1")
+        # Report the port we ACTUALLY got (0 = ephemeral), so the redirect_uri
+        # the browser is given matches the socket that is actually listening.
+        self._callback_port = server.server_address[1]
+        callback_url = f"http://127.0.0.1:{self._callback_port}/callback"
+        print(f"   OAuth-колбэк слушает: {callback_url}")
         server_thread = asyncio.get_event_loop().run_in_executor(None, server.serve_forever)
         
         try:
