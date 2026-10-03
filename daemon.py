@@ -20,6 +20,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -65,6 +66,12 @@ class RemoteGatewayProxy:
         self.state_file = state_file or _default_state_file()
         self._pending_tunnels: set = set()
         self._session: Optional[aiohttp.ClientSession] = None
+        # Ping ids the TUI asked about that the REMOTE has not answered yet, so
+        # we can answer them ourselves instead of letting the TUI hit its 45s
+        # silence deadline. See _maybe_answer_ping.
+        self._unanswered_pings: dict[str, float] = {}
+        # How long to wait for the remote's own pong before answering locally.
+        self._pong_grace_s = 3.0
 
     # ---- JSON-RPC frame helpers ------------------------------------
 
@@ -112,7 +119,59 @@ class RemoteGatewayProxy:
             params["profile"] = profile
             frame = dict(frame)
             frame["params"] = params
+
+        # Track heartbeat pings so the down-leg can drop a duplicate answer and
+        # so we can answer the TUI ourselves if the remote stays silent.
+        if method == "gateway.ping" and isinstance(frame.get("id"), str):
+            self._unanswered_pings[frame["id"]] = time.monotonic()
+            self._trim_ping_bookkeeping()
         return (True, frame)
+
+    def _trim_ping_bookkeeping(self) -> None:
+        """Drop ping ids older than the TUI's heartbeat interval can matter."""
+        if not self._unanswered_pings:
+            return
+        cutoff = time.monotonic() - 120.0
+        for pid in [p for p, ts in self._unanswered_pings.items() if ts < cutoff]:
+            self._unanswered_pings.pop(pid, None)
+
+    def _settle_ping(self, frame: dict) -> bool:
+        """If this inbound frame is a response to a tracked ping, consume it.
+
+        Returns True when the frame was a heartbeat reply (and therefore must
+        NOT also be answered locally).
+        """
+        rid = frame.get("id")
+        if not isinstance(rid, str):
+            return False
+        if "result" not in frame and "error" not in frame:
+            return False
+        return self._unanswered_pings.pop(rid, None) is not None
+
+    async def _answer_pending_pings(self, local_ws) -> None:
+        """Answer any heartbeat the remote did not answer within the grace period.
+
+        The native TUI pings every 15s and force-closes after 45s of complete
+        silence (`heartbeatLiveness: 'any-inbound'`, apps/shared/src/
+        json-rpc-channel.ts). When the remote gateway's reply does not make it
+        back through the tunnel, the TUI closes a perfectly healthy socket and
+        reconnects forever. So we answer it here — but only after waiting, and
+        only for pings the remote has not already answered.
+        """
+        if not self._unanswered_pings:
+            return
+        now = time.monotonic()
+        due = [pid for pid, ts in self._unanswered_pings.items()
+               if now - ts >= self._pong_grace_s]
+        for pid in due:
+            self._unanswered_pings.pop(pid, None)
+            try:
+                await local_ws.send_str(json.dumps({
+                    "jsonrpc": "2.0", "id": pid, "result": {"ok": True},
+                }, ensure_ascii=False))
+            except Exception as exc:  # noqa: BLE001 — socket may be closing
+                _log.debug("[daemon] could not answer ping locally: %s", exc)
+                return
 
     # ---- WebSocket tunnel to remote gateway ------------------------
 
@@ -148,6 +207,8 @@ class RemoteGatewayProxy:
                     if fp_forward:
                         await remote_ws.send_str(
                             json.dumps(fp_payload, ensure_ascii=False))
+                        # Give the TUI an answer if the remote stays silent.
+                        asyncio.create_task(self._answer_pending_pings(local_ws))
                     else:
                         await local_ws.send_json(fp_payload)
                     continue
@@ -170,6 +231,15 @@ class RemoteGatewayProxy:
         try:
             async for msg in remote_ws:
                 if msg.type == aiohttp.WSMsgType.TEXT:
+                    # If this is the remote's answer to a heartbeat we tracked,
+                    # let it through (it satisfies the TUI) and mark the ping
+                    # settled so we never send a duplicate answer.
+                    try:
+                        inbound = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        inbound = None
+                    if isinstance(inbound, dict) and self._settle_ping(inbound):
+                        _log.debug("[daemon] heartbeat answered by remote")
                     await local_ws.send_str(msg.data)
                 elif msg.type == aiohttp.WSMsgType.BINARY:
                     await local_ws.send_bytes(msg.data)
